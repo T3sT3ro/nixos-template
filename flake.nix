@@ -36,9 +36,13 @@
     };
   };
 
-  outputs = { nixpkgs, disko, home-manager, niri, noctalia, ... }@inputs: {
+  outputs = { nixpkgs, disko, home-manager, niri, noctalia, ... }@inputs: let
+    system = "x86_64-linux";
+    pkgs = nixpkgs.legacyPackages.${system};
+  in {
+    # ─── NixOS system configuration ────────────────────────────────────────
     nixosConfigurations.__HOSTNAME__ = nixpkgs.lib.nixosSystem {
-      system = "x86_64-linux";
+      inherit system;
       specialArgs = { inherit inputs; };
       modules = [
         disko.nixosModules.disko
@@ -54,6 +58,19 @@
           home-manager.users.__USERNAME__ = import ./home.nix;
         }
       ];
+    };
+
+    # ─── Installer app ─────────────────────────────────────────────────────
+    # Usage from live USB:
+    #   nix run github:YOUR_USER/nixos-config
+    apps.${system}.default = {
+      type = "app";
+      program = let
+        installer = pkgs.writeShellScriptBin "nixos-installer" ''
+          export FLAKE_DIR="${./.}"
+          exec ${pkgs.bash}/bin/bash ${./install.sh}
+        '';
+      in "${installer}/bin/nixos-installer";
     };
   };
 }

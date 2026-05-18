@@ -2,7 +2,6 @@
 {
   imports = [
     inputs.noctalia.homeModules.default
-    inputs.niri.homeModules.niri
   ];
 
   home.username = "__USERNAME__";

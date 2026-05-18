@@ -9,7 +9,6 @@
 
     initrd = {
       systemd.enable = true; # required for graphical LUKS prompt in Plymouth
-      luks.devices.nixos.device = "/dev/disk/by-uuid/__LUKS_UUID__";
     };
 
     # Hibernation

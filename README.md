@@ -10,7 +10,7 @@
 │ EFI/FAT  │ LUKS2 ("nixos")                  │
 │ 1G       │ rest of disk                     │
 │ /boot    │   └─ BTRFS                       │
-│          │      ├─ @root  → /               │
+│          │      ├─ @      → /               │
 │          │      ├─ @home  → /home           │
 │          │      ├─ @nix   → /nix            │
 │          │      ├─ @log   → /var/log        │
@@ -28,11 +28,11 @@ Boot flow:
 
 | Subvolume | Mount     | Purpose |
 |-----------|-----------|---------|
-| `/root`   | `/`       | System root; rollback-friendly |
-| `/home`   | `/home`   | User data; snapshot/backup independently |
-| `/nix`    | `/nix`    | Nix store; reproducible, trivial to reconstruct — skip backups |
-| `/log`    | `/var/log` | Persistent logs surviving rollbacks |
-| `/swap`   | `/swap`   | Hosts 50G swapfile for hibernation; CoW disabled automatically by disko |
+| `@`       | `/`       | System root; rollback-friendly |
+| `@home`   | `/home`   | User data; snapshot/backup independently |
+| `@nix`    | `/nix`    | Nix store; reproducible, trivial to reconstruct — skip backups |
+| `@log`    | `/var/log` | Persistent logs surviving rollbacks |
+| `@swap`   | `/swap`   | Hosts 50G swapfile for hibernation; CoW disabled automatically by disko |
 
 **Why `noatime`:** Prevents a CoW metadata write on every read. Critical on btrfs+SSD.
 
@@ -109,44 +109,63 @@ echo "resume_offset = $RESUME_OFFSET"
 
 ---
 
-## 6. Get LUKS partition UUID
+## 6. Substitute runtime values
 
 ```bash
-# For nvme disks it's ${DISK}p2, for sata it's ${DISK}2
-LUKS_UUID=$(blkid -s UUID -o value "${DISK}p2" 2>/dev/null \
-         || blkid -s UUID -o value "${DISK}2")
-echo "LUKS_UUID = $LUKS_UUID"
-```
-
----
-
-## 7. Substitute runtime values
-
-```bash
-sed -i "s|__LUKS_UUID__|$LUKS_UUID|" /tmp/nixcfg/configuration.nix
 sed -i "s|__RESUME_OFFSET__|$RESUME_OFFSET|" /tmp/nixcfg/configuration.nix
 ```
 
 ---
 
-## 8. Generate hardware-configuration.nix
+## 7. Generate hardware-configuration.nix
 
 ```bash
 nixos-generate-config --root /mnt --dir /tmp/nixcfg
-
-# Remove auto-generated fileSystems and swapDevices — disko manages them
-sed -i '/^\s*fileSystems\./,/^\s*};/d' /tmp/nixcfg/hardware-configuration.nix
-sed -i '/^\s*swapDevices/,/^\s*\];/d' /tmp/nixcfg/hardware-configuration.nix
 ```
 
-**Verify manually** that only kernel modules and hardware detection remain:
+Now edit `/tmp/nixcfg/hardware-configuration.nix` to remove the `fileSystems.*` and
+`swapDevices` blocks (disko manages those). You can do this manually with `nano`:
+
+```bash
+nano /tmp/nixcfg/hardware-configuration.nix
+```
+
+The result should look like this (details will vary per machine):
+
+```nix
+{ config, lib, pkgs, modulesPath, ... }:
+
+{
+  imports = [
+    (modulesPath + "/installer/scan/not-detected.nix")
+  ];
+
+  boot.initrd.availableKernelModules = [ "xhci_pci" "ahci" "nvme" "usb_storage" "sd_mod" ];
+  boot.initrd.kernelModules = [ ];
+  boot.kernelModules = [ "kvm-intel" ];  # or kvm-amd
+  boot.extraModulePackages = [ ];
+
+  # Filesystem and swap entries removed — managed by disko
+
+  nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
+  hardware.cpu.intel.updateMicrocode = lib.mkDefault config.hardware.enableRedistributableFirmware;
+}
+```
+
+**Key points:**
+- The file must start with `{ ... }:` and end with a matching `}`
+- Remove all `fileSystems."/..." = { ... };` blocks
+- Remove the `swapDevices = [ ... ];` block
+- Keep `boot.*`, `nixpkgs.hostPlatform`, `hardware.cpu.*`, and the `imports`
+
+Verify:
 ```bash
 cat /tmp/nixcfg/hardware-configuration.nix
 ```
 
 ---
 
-## 9. Install
+## 8. Install
 
 ```bash
 mkdir -p /mnt/etc/nixos
@@ -162,7 +181,7 @@ nixos-enter --root /mnt -c "passwd $USERNAME"
 
 ---
 
-## 10. Reboot
+## 9. Reboot
 
 ```bash
 reboot

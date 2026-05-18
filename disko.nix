@@ -1,8 +1,10 @@
-{ ... }:
+{ lib, ... }:
 {
+  # Set via: disko.devices.disk.main.device = "/dev/nvme0n1";
+  # or passed from flake.nix / installer
   disko.devices = {
     disk.main = {
-      device = "__DISK__";
+      device = lib.mkDefault "/dev/nvme0n1";
       type = "disk";
       content = {
         type = "gpt";
@@ -28,23 +30,23 @@
                 type = "btrfs";
                 extraArgs = [ "-f" ];
                 subvolumes = {
-                  "/root" = {
+                  "/@" = {
                     mountpoint = "/";
                     mountOptions = [ "compress=zstd" "noatime" ];
                   };
-                  "/home" = {
+                  "/@home" = {
                     mountpoint = "/home";
                     mountOptions = [ "compress=zstd" "noatime" ];
                   };
-                  "/nix" = {
+                  "/@nix" = {
                     mountpoint = "/nix";
                     mountOptions = [ "compress=zstd" "noatime" ];
                   };
-                  "/log" = {
+                  "/@log" = {
                     mountpoint = "/var/log";
                     mountOptions = [ "compress=zstd" "noatime" ];
                   };
-                  "/swap" = {
+                  "/@swap" = {
                     mountpoint = "/swap";
                     mountOptions = [ "noatime" ];
                     swap.swapfile.size = "50G";
