@@ -1,11 +1,11 @@
-{ pkgs, inputs, config, ... }:
+{ pkgs, inputs, config, settings, ... }:
 {
   imports = [
     inputs.noctalia.homeModules.default
   ];
 
-  home.username = "__USERNAME__";
-  home.homeDirectory = "/home/__USERNAME__";
+  home.username = settings.username;
+  home.homeDirectory = "/home/${settings.username}";
   home.stateVersion = "25.05";
   programs.home-manager.enable = true;
 

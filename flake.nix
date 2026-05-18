@@ -39,11 +39,12 @@
   outputs = { nixpkgs, disko, home-manager, niri, noctalia, ... }@inputs: let
     system = "x86_64-linux";
     pkgs = nixpkgs.legacyPackages.${system};
+    settings = import ./settings.nix;
   in {
     # ─── NixOS system configuration ────────────────────────────────────────
-    nixosConfigurations.__HOSTNAME__ = nixpkgs.lib.nixosSystem {
+    nixosConfigurations.${settings.hostname} = nixpkgs.lib.nixosSystem {
       inherit system;
-      specialArgs = { inherit inputs; };
+      specialArgs = { inherit inputs settings; };
       modules = [
         disko.nixosModules.disko
         ./disko.nix
@@ -54,15 +55,15 @@
         {
           home-manager.useGlobalPkgs = true;
           home-manager.useUserPackages = true;
-          home-manager.extraSpecialArgs = { inherit inputs; };
-          home-manager.users.__USERNAME__ = import ./home.nix;
+          home-manager.extraSpecialArgs = { inherit inputs settings; };
+          home-manager.users.${settings.username} = import ./home.nix;
         }
       ];
     };
 
     # ─── Installer app ─────────────────────────────────────────────────────
     # Usage from live USB:
-    #   nix run github:YOUR_USER/nixos-config
+    #   sudo nix run github:YOUR_USER/nixos-config
     apps.${system}.default = {
       type = "app";
       program = let

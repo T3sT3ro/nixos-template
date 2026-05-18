@@ -1,10 +1,11 @@
-{ lib, ... }:
+{ ... }:
+let
+  settings = import ./settings.nix;
+in
 {
-  # Set via: disko.devices.disk.main.device = "/dev/nvme0n1";
-  # or passed from flake.nix / installer
   disko.devices = {
     disk.main = {
-      device = lib.mkDefault "/dev/nvme0n1";
+      device = settings.disk;
       type = "disk";
       content = {
         type = "gpt";
@@ -24,6 +25,8 @@
             content = {
               type = "luks";
               name = "nixos";
+              # passwordFile is only used by `disko --mode disko` during install.
+              # At runtime, systemd-initrd prompts interactively (via Plymouth).
               passwordFile = "/tmp/luks-password";
               settings.allowDiscards = true;
               content = {
