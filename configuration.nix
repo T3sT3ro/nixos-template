@@ -95,6 +95,7 @@
     isNormalUser = true;
     extraGroups = [ "wheel" "networkmanager" "video" ];
     shell = pkgs.zsh;
+    initialHashedPassword = settings.hashedPassword;
   };
 
   # Passwordless sudo for wheel group.

@@ -67,35 +67,27 @@ nix run github:nix-community/nixos-anywhere -- \
   --flake /tmp/nixcfg#HOSTNAME \
   --target-host root@localhost \
   --disk-encryption-keys /tmp/luks-password /tmp/luks-password \
-  --generate-hardware-config nixos-generate-config ./hardware-configuration.nix
+  --generate-hardware-config nixos-generate-config ./hardware-configuration.nix \
+  --extra-files /tmp/nixos-extra-files
 ```
 
 Replace `HOSTNAME` with the value you set in `settings.nix`.
 
 This single command:
 - Partitions the disk (disko: GPT + LUKS2 + BTRFS subvolumes)
-- Builds the NixOS system closure
-- Installs everything to the target disk
+- Builds the full NixOS system closure (DE, shell, everything)
+- Installs to the target disk
 - Generates `hardware-configuration.nix` from detected hardware
+- Copies config files to `/etc/nixos` via `--extra-files` (for future rebuilds)
+- Reboots into the installed system
 
-### 4. Copy config to installed system
+### 4. Reboot
 
-```bash
-# After nixos-anywhere finishes, config is at /mnt/etc/nixos
-# Copy our source (with the generated hardware-configuration.nix) for future rebuilds
-cp /tmp/nixcfg/*.nix /tmp/nixcfg/*.lock /tmp/nixcfg/*.sh /mnt/etc/nixos/ 2>/dev/null || true
-cp /tmp/nixcfg/.gitignore /mnt/etc/nixos/ 2>/dev/null || true
-cd /mnt/etc/nixos && git init -q && git add -A
-```
+nixos-anywhere reboots automatically after install. The full system (Niri, Noctalia, zsh, etc.) is already built into the installed closure — no config files on disk are needed for it to work.
 
-### 5. Set user password and reboot
+Your user password was set during `setup.sh` (via `initialHashedPassword`). Change it after first login with `passwd`.
 
-```bash
-nixos-enter --root /mnt -c "passwd USERNAME"
-reboot
-```
-
-### 6. Post-install: enable hibernation
+### 5. Post-install: enable hibernation
 
 After first boot, run once to compute the swapfile offset:
 

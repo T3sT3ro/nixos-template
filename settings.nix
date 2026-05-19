@@ -4,5 +4,6 @@
   disk = "/dev/nvme0n1";
   hostname = "nixbox";
   username = "tooster";
+  hashedPassword = "";
   resumeOffset = "0";
 }
