@@ -1,6 +1,6 @@
-# NixOS Installation — LUKS + BTRFS + Disko + Flakes + Niri + Noctalia
+# NixOS Configuration — LUKS + BTRFS + Disko + Niri + Noctalia
 
-## Architecture
+## Disk layout
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -15,201 +15,133 @@
 │          │      ├─ @nix   → /nix            │
 │          │      ├─ @log   → /var/log        │
 │          │      └─ @swap  → /swap           │
-│          │           └─ swapfile (50G)       │
+│          │           └─ swapfile (50G)      │
 └──────────┴──────────────────────────────────┘
-
-Boot flow:
-  systemd-boot → initrd (systemd) → Plymouth splash
-    → LUKS password prompt (graphical) → mount btrfs
-    → Niri session → Noctalia shell spawns
 ```
 
-**Subvolumes:**
+## Installation
 
-| Subvolume | Mount     | Purpose |
-|-----------|-----------|---------|
-| `@`       | `/`       | System root; rollback-friendly |
-| `@home`   | `/home`   | User data; snapshot/backup independently |
-| `@nix`    | `/nix`    | Nix store; reproducible, trivial to reconstruct — skip backups |
-| `@log`    | `/var/log` | Persistent logs surviving rollbacks |
-| `@swap`   | `/swap`   | Hosts 50G swapfile for hibernation; CoW disabled automatically by disko |
+Boot the **NixOS minimal installer USB** (≥ 23.05). Connect to the internet.
 
-**Why `noatime`:** Prevents a CoW metadata write on every read. Critical on btrfs+SSD.
-
----
-
-## 0. Set variables (adjust these!)
+### 1. Prepare the live environment
 
 ```bash
-lsblk
-DISK="/dev/nvme0n1"       # YOUR target disk
-USERNAME="tooster"
-HOSTNAME="nixbox"
-```
-
----
-
-## 1. Enable flakes in live USB
-
-```bash
+# Enable flakes
 export NIX_CONFIG="experimental-features = nix-command flakes"
+
+# Set root password (needed for SSH to localhost)
+passwd root
+
+# Ensure sshd is running
+systemctl start sshd
 ```
 
----
-
-## 2. Transfer config files to live USB
-
-On your source machine (where you ran `send.sh`), the files were sent.
-On the live USB you should have received them, e.g.:
+### 2. Clone and configure
 
 ```bash
-# On live USB — receive files (run BEFORE sending):
-cd /tmp && nc -l -p 3333 | tar xz
-# This creates /tmp/nixcfg/ with all .nix files
-```
-
-Or manually copy them to `/tmp/nixcfg/`.
-
----
-
-## 3. Substitute placeholders in configs
-
-```bash
+nix-shell -p git
+git clone https://github.com/T3sT3ro/nixos-template /tmp/nixcfg
 cd /tmp/nixcfg
 
-sed -i "s|__DISK__|$DISK|g" disko.nix
-sed -i "s|__HOSTNAME__|$HOSTNAME|g" flake.nix configuration.nix
-sed -i "s|__USERNAME__|$USERNAME|g" flake.nix configuration.nix home.nix
+# Run the setup helper — prompts for disk, hostname, username, LUKS passphrase
+sudo ./setup.sh
 ```
 
----
-
-## 4. Write LUKS passphrase and run disko
+Or configure manually:
 
 ```bash
-read -s -p "LUKS passphrase: " PASSPHRASE && echo
-echo -n "$PASSPHRASE" > /tmp/luks-password
+# Edit settings.nix with your values
+nano settings.nix
 
-nix run github:nix-community/disko -- --mode disko /tmp/nixcfg/disko.nix
+# Write LUKS passphrase (used by disko during format only)
+echo -n "your-passphrase" > /tmp/luks-password && chmod 600 /tmp/luks-password
 
-# Verify
-mount | grep /mnt
+# Stage for flake evaluation
+git add -A
 ```
 
-> WARNING: This erases ALL data on $DISK.
-
----
-
-## 5. Get hibernation resume offset
+### 3. Install with nixos-anywhere
 
 ```bash
-RESUME_OFFSET=$(btrfs inspect-internal map-swapfile -r /mnt/swap/swapfile)
-echo "resume_offset = $RESUME_OFFSET"
+nix run github:nix-community/nixos-anywhere -- \
+  --flake /tmp/nixcfg#HOSTNAME \
+  --target-host root@localhost \
+  --disk-encryption-keys /tmp/luks-password /tmp/luks-password \
+  --generate-hardware-config nixos-generate-config ./hardware-configuration.nix
 ```
 
----
+Replace `HOSTNAME` with the value you set in `settings.nix`.
 
-## 6. Substitute runtime values
+This single command:
+- Partitions the disk (disko: GPT + LUKS2 + BTRFS subvolumes)
+- Builds the NixOS system closure
+- Installs everything to the target disk
+- Generates `hardware-configuration.nix` from detected hardware
+
+### 4. Copy config to installed system
 
 ```bash
-sed -i "s|__RESUME_OFFSET__|$RESUME_OFFSET|" /tmp/nixcfg/configuration.nix
+# After nixos-anywhere finishes, config is at /mnt/etc/nixos
+# Copy our source (with the generated hardware-configuration.nix) for future rebuilds
+cp /tmp/nixcfg/*.nix /tmp/nixcfg/*.lock /tmp/nixcfg/*.sh /mnt/etc/nixos/ 2>/dev/null || true
+cp /tmp/nixcfg/.gitignore /mnt/etc/nixos/ 2>/dev/null || true
+cd /mnt/etc/nixos && git init -q && git add -A
 ```
 
----
-
-## 7. Generate hardware-configuration.nix
+### 5. Set user password and reboot
 
 ```bash
-nixos-generate-config --root /mnt --dir /tmp/nixcfg
-```
-
-Now edit `/tmp/nixcfg/hardware-configuration.nix` to remove the `fileSystems.*` and
-`swapDevices` blocks (disko manages those). You can do this manually with `nano`:
-
-```bash
-nano /tmp/nixcfg/hardware-configuration.nix
-```
-
-The result should look like this (details will vary per machine):
-
-```nix
-{ config, lib, pkgs, modulesPath, ... }:
-
-{
-  imports = [
-    (modulesPath + "/installer/scan/not-detected.nix")
-  ];
-
-  boot.initrd.availableKernelModules = [ "xhci_pci" "ahci" "nvme" "usb_storage" "sd_mod" ];
-  boot.initrd.kernelModules = [ ];
-  boot.kernelModules = [ "kvm-intel" ];  # or kvm-amd
-  boot.extraModulePackages = [ ];
-
-  # Filesystem and swap entries removed — managed by disko
-
-  nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
-  hardware.cpu.intel.updateMicrocode = lib.mkDefault config.hardware.enableRedistributableFirmware;
-}
-```
-
-**Key points:**
-- The file must start with `{ ... }:` and end with a matching `}`
-- Remove all `fileSystems."/..." = { ... };` blocks
-- Remove the `swapDevices = [ ... ];` block
-- Keep `boot.*`, `nixpkgs.hostPlatform`, `hardware.cpu.*`, and the `imports`
-
-Verify:
-```bash
-cat /tmp/nixcfg/hardware-configuration.nix
-```
-
----
-
-## 8. Install
-
-```bash
-mkdir -p /mnt/etc/nixos
-cp /tmp/nixcfg/*.nix /mnt/etc/nixos/
-
-nixos-install --flake /mnt/etc/nixos#$HOSTNAME --no-root-passwd
-```
-
-Set user password:
-```bash
-nixos-enter --root /mnt -c "passwd $USERNAME"
-```
-
----
-
-## 9. Reboot
-
-```bash
+nixos-enter --root /mnt -c "passwd USERNAME"
 reboot
 ```
 
-Remove USB. Plymouth shows the LUKS prompt graphically. Enter passphrase → Niri starts → Noctalia shell spawns.
+### 6. Post-install: enable hibernation
+
+After first boot, run once to compute the swapfile offset:
+
+```bash
+sudo /etc/nixos/post-install.sh
+sudo reboot
+```
+
+This updates `resumeOffset` in `settings.nix` and rebuilds. Hibernation works after this reboot.
 
 ---
 
-## Post-install checklist
+## Day-to-day usage
 
-| Task | How |
-|------|-----|
-| Init git repo | `cd /etc/nixos && sudo git init && sudo git add -A && sudo git commit -m "initial"` |
-| Test hibernation | `systemctl hibernate` |
-| Noctalia first-run | Setup wizard appears automatically on first launch |
-| Keyd verify | CapsLock → F13; Shift+CapsLock → actual CapsLock toggle |
-| Join AD (later) | Uncomment `services.sssd` in configuration.nix, fill domain/URL, rebuild |
-| Restore from deja-dup | Open Deja Dup → Restore → point to old backup location (reads Ubuntu duplicity format) |
-| Move config to remote | `cd /etc/nixos && git remote add origin <url> && git push -u origin main` |
+```bash
+# Edit configuration
+sudo nano /etc/nixos/configuration.nix
+
+# Rebuild
+cd /etc/nixos && git add -A
+sudo nixos-rebuild switch --flake .#HOSTNAME
+```
 
 ---
 
-## Key design decisions
+## How nixos-anywhere works here
 
-- **Plymouth + `boot.initrd.systemd.enable = true`** — makes the LUKS prompt graphical within the Plymouth splash. Escape shows logs (hybrid boot).
-- **Default `bgrt` Plymouth theme** — vendor logo, natively supports graphical LUKS password entry. Custom themes may not.
-- **`allowDiscards = true` on LUKS** — enables TRIM for SSD longevity. Minimal theoretical info leak (which blocks are used); acceptable for desktop.
-- **`hardware.nvidia.open = true`** — open-source kernel modules for Turing+ GPUs. Set `false` for pre-Turing.
-- **Passwordless sudo** — disk is LUKS-encrypted; anyone at the keyboard already proved identity. Revisit if adding remote SSH or multiple users.
-- **Flat (non-modular) structure** — good for initial install. Refactor into `hosts/`, `modules/`, `home/` subdirectories later when adding the git repo.
+[nixos-anywhere](https://github.com/nix-community/nixos-anywhere) is the standard NixOS community tool for declarative installation. It:
+
+1. Detects the NixOS installer environment (`VARIANT_ID=installer`) — skips kexec
+2. Runs disko to partition/format/mount the disk
+3. Builds and installs the NixOS closure from the flake
+4. Reboots into the installed system
+
+The `--disk-encryption-keys` flag copies the LUKS passphrase into the installer environment where disko's `passwordFile` expects it. At runtime, Plymouth prompts for the passphrase interactively (systemd-initrd).
+
+---
+
+## Design decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| `settings.nix` attrset | Single source of truth for hardware-specific values, no sed templating |
+| Split `resumeOffset` to post-install | Swapfile offset can only be computed after disko creates it; avoids split-phase hacks |
+| `boot.initrd.systemd.enable` | Required for graphical Plymouth LUKS prompt |
+| `allowDiscards = true` | TRIM for SSD longevity; minimal info leak, acceptable for desktop |
+| `hardware.nvidia.open = true` | Open kernel modules for Turing+ GPUs |
+| Passwordless sudo | Disk is LUKS-encrypted; physical access already requires the passphrase |
+| `noatime` on all subvolumes | Avoids CoW metadata write on every read (critical for btrfs+SSD) |
